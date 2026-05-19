@@ -10,9 +10,11 @@ pub struct StoredConfig {
 }
 
 pub fn config_path() -> anyhow::Result<PathBuf> {
+    // HOME is set on Unix-like systems; USERPROFILE is the Windows equivalent.
     let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-        .context("HOME environment variable not set")?;
+        .context("could not determine home directory (HOME/USERPROFILE unset)")?;
     Ok(home.join(".portex").join("config.toml"))
 }
 

@@ -21,9 +21,10 @@ case "$OS-$ARCH" in
   Darwin-x86_64)       ASSET="portex-darwin-amd64" ;;
   Linux-x86_64)        ASSET="portex-linux-amd64" ;;
   Linux-aarch64)       ASSET="portex-linux-arm64" ;;
+  MINGW*-x86_64 | MSYS*-x86_64 | CYGWIN*-x86_64) ASSET="portex-windows-amd64.exe" ;;
   *)
     echo "Unsupported platform: $OS-$ARCH" >&2
-    echo "Currently published: darwin-arm64, darwin-amd64, linux-amd64, linux-arm64" >&2
+    echo "Currently published: darwin-arm64, darwin-amd64, linux-amd64, linux-arm64, windows-amd64" >&2
     exit 1
     ;;
 esac

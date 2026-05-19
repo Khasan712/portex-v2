@@ -44,6 +44,168 @@ path and a Django control plane for accounts.
 
 ---
 
+## Install the CLI
+
+Pre-built binaries are published on every release. The one-liner installer
+auto-detects your OS/arch:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Khasan712/portex-v2/main/install.sh | sh
+```
+
+It writes to `/usr/local/bin/portex` (uses `sudo` only if the directory
+isn't writable). Set `PORTEX_INSTALL_DIR=$HOME/.local/bin` to install
+without root.
+
+To pin a specific release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Khasan712/portex-v2/main/install.sh | sh -s -- v0.2.0
+```
+
+### Manual download
+
+Grab the binary for your platform from the
+[**releases page**](https://github.com/Khasan712/portex-v2/releases) and
+make it executable.
+
+| Platform | Asset |
+|---|---|
+| macOS Apple Silicon | `portex-darwin-arm64` |
+| macOS Intel | `portex-darwin-amd64` |
+| Linux x86_64 | `portex-linux-amd64` |
+| Linux ARM64 (Graviton/Raspberry Pi) | `portex-linux-arm64` |
+| Windows x86_64 | `portex-windows-amd64.exe` |
+
+Checksums for every asset live in `checksums.txt` next to the binaries.
+Verify with `shasum -a 256 -c checksums.txt`.
+
+### Windows notes
+
+The Linux/macOS one-liner works inside **Git Bash**, **MSYS2**, or **WSL2**.
+For native PowerShell/CMD use the manual download above, then add the `.exe`
+to your `PATH`.
+
+### Build from source
+
+If you prefer to build yourself (Rust 1.75+ required):
+
+```bash
+git clone https://github.com/Khasan712/portex-v2.git
+cd portex-v2/portex_rust
+cargo build --release --bin portex
+# Binary is at ./target/release/portex
+```
+
+---
+
+## How to use portex
+
+The typical end-user flow takes ~30 seconds.
+
+### 1. Get an account and a token
+
+The server admin creates user accounts (self-signup is on the roadmap). Once
+you have credentials:
+
+1. Open `https://<your-portex-host>/accounts/login/` and sign in.
+2. You'll land on **`/dashboard/`**.
+3. In **Auth tokens**, click *Issue new token* (optionally label it
+   `laptop`, `ci`, etc.). The plaintext token is shown **once** in a green
+   box — copy it now.
+4. In **Reserved subdomains**, claim a subdomain — e.g. `acme`. Rules:
+   - lowercase letters, digits, hyphens
+   - 1–63 chars
+   - no leading/trailing hyphen
+   - must not be taken by someone else
+
+### 2. Save the token on your machine
+
+```bash
+portex auth <YOUR_TOKEN>
+```
+
+The token is stored at `~/.portex/config.toml` (`%USERPROFILE%\.portex\config.toml`
+on Windows) with permissions `0600`. You only do this once per machine.
+
+### 3. Start your local server
+
+Anything that listens on a TCP port works. Examples:
+
+```bash
+# Static directory
+python3 -m http.server 3000
+
+# Node app
+npm start                    # if it binds 3000
+
+# Django dev server
+python manage.py runserver 3000
+
+# Vite, Next.js, Rails — all the same
+```
+
+### 4. Open the tunnel
+
+```bash
+portex http -s acme -p 3000
+```
+
+You should see:
+
+```
+✓ tunneling https://acme.portex.live → http://127.0.0.1:3000
+```
+
+Leave the process running — it holds the tunnel open. Stop it with `Ctrl-C`.
+
+### 5. Share the public URL
+
+Anyone on the internet can now reach your local server at
+**`https://acme.portex.live`**. Useful for:
+
+- **Webhook testing** — Stripe, GitHub, Telegram bots, IPN handlers.
+- **Mobile testing** — your phone can hit your laptop's dev server.
+- **Demos** — share a half-built feature with a teammate or client.
+- **Pair programming** — let someone debug against your machine.
+
+### 6. (Optional) Pick a custom server
+
+By default the CLI connects to `portex.live`. To point at a self-hosted
+instance:
+
+```bash
+portex http -s acme -p 3000 --server my.portex.host:4443
+```
+
+Or set the env var once:
+
+```bash
+export PORTEX_SERVER=my.portex.host:4443
+portex http -s acme -p 3000
+```
+
+### Common usage patterns
+
+| Goal | Command |
+|---|---|
+| Tunnel a local web app on port 8000 | `portex http -s mysub -p 8000` |
+| Tunnel a Vite dev server (5173) | `portex http -s mysub -p 5173` |
+| Use a different token without saving | `portex http -s mysub -p 3000 --token <X>` |
+| Talk to a dev server (skip TLS check) | `portex http -s mysub -p 3000 --insecure` |
+
+### Common errors
+
+| Message | What it means | Fix |
+|---|---|---|
+| `Unauthorized` | Token doesn't exist or was revoked | Re-issue via dashboard, run `portex auth <new>` |
+| `SubdomainNotReserved` | The name you passed to `-s` isn't claimed yet | Claim it in *Reserved subdomains* |
+| `SubdomainTaken` | Someone else owns it, or you already have it open elsewhere | Pick another name, or stop the other process |
+| `connection refused` to local | Local server isn't listening on `-p PORT` | Start your server first |
+| `no tunnel for 'X'` (curl) | The CLI isn't connected | Run `portex http -s X -p ...` again |
+
+---
+
 ## Quickstart (local, no domain required)
 
 Prerequisites: Docker Desktop, Rust toolchain (`curl -sSf https://sh.rustup.rs | sh`).

@@ -1,0 +1,73 @@
+# Full stack: Django control plane + Rust gateway + Redis + Postgres.
+# Run from the repo root: `docker compose up --build`.
+
+services:
+  db:
+    image: postgres:16
+    container_name: portex_db
+    restart: unless-stopped
+    env_file: ./portex_server/portex/.env
+    volumes:
+      - postgres_data_portex:/var/lib/postgresql/data/
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:alpine
+    container_name: portex_redis
+    restart: unless-stopped
+    volumes:
+      - portex_redis_data:/data
+    ports:
+      - "6379:6379"
+
+  django:
+    build:
+      context: ./portex_server/portex
+    container_name: portex_django
+    restart: unless-stopped
+    command: bash entrypoint.sh
+    env_file: ./portex_server/portex/.env
+    volumes:
+      - ./portex_server/portex:/portex
+    depends_on:
+      - db
+      - redis
+    ports:
+      - "9091:9091"
+
+  celery-worker:
+    build:
+      context: ./portex_server/portex
+    container_name: portex_celery_worker
+    restart: unless-stopped
+    command: celery -A config worker -l info --concurrency=10 --pool=gevent
+    env_file: ./portex_server/portex/.env
+    volumes:
+      - ./portex_server/portex:/portex
+    depends_on:
+      - django
+      - redis
+
+  gateway:
+    build:
+      context: ./portex_rust
+    container_name: portex_gateway
+    restart: unless-stopped
+    environment:
+      PORTEX_HTTP_ADDR: 0.0.0.0:8080
+      PORTEX_TUNNEL_ADDR: 0.0.0.0:4443
+      PORTEX_METRICS_ADDR: 0.0.0.0:9090
+      PORTEX_BASE_DOMAIN: ${PORTEX_BASE_DOMAIN:-portex.live}
+      PORTEX_REDIS_URL: redis://redis:6379/0
+      RUST_LOG: info
+    depends_on:
+      - redis
+    ports:
+      - "8080:8080/tcp"
+      - "4443:4443/udp"
+      - "127.0.0.1:9090:9090/tcp"
+
+volumes:
+  postgres_data_portex:
+  portex_redis_data:

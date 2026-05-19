@@ -1,0 +1,66 @@
+services:
+  app:
+    build:
+      context: .
+    container_name: portex_app
+    restart: always
+    command: bash entrypoint.sh
+    volumes:
+      - .:/portex
+    env_file:
+      - .env
+    depends_on:
+      - db
+    ports:
+      - 9091:9091
+
+  db:
+    image: postgres:16
+    container_name: "portex_db"
+    volumes:
+      - postgres_data_portex:/var/lib/postgresql/data/
+    env_file:
+      - ./.env
+    ports:
+      - 5437:5432
+
+  redis:
+    container_name: portex_redis
+    image: redis:alpine
+    ports:
+      - 6387:6379
+    volumes:
+      - portex_redis_data:/data
+    depends_on:
+      - app
+      - db
+
+  celery-worker:
+    container_name: portex_celery_worker
+    build:
+      context: .
+    command: celery -A config worker -l info --concurrency=10 --pool=gevent
+    volumes:
+      - .:/portex
+    depends_on:
+      - app
+      - redis
+      - db
+
+  celery-beat:
+    container_name: portex_celery_beat
+    build:
+      context: .
+    command: celery -A config beat -l info
+    volumes:
+      - .:/portex
+    depends_on:
+      - app
+      - redis
+      - celery-worker
+      - db
+
+volumes:
+  postgres_data_portex:
+  portex_redis_data:
+

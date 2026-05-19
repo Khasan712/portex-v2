@@ -1,0 +1,39 @@
+[package]
+name = "portex-gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "portex-gateway"
+path = "src/main.rs"
+
+[dependencies]
+portex-common.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+rcgen.workspace = true
+tokio-rustls.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+clap.workspace = true
+serde.workspace = true
+toml.workspace = true
+redis.workspace = true
+instant-acme.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+arc-swap.workspace = true
+sha2.workspace = true
+hex.workspace = true
+time.workspace = true
+x509-parser.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

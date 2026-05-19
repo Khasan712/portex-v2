@@ -1,0 +1,94 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>portex — dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@200..700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{% static 'style.css' %}" />
+  <style>
+    .dash { max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #eee; font-family: Oswald, sans-serif; }
+    .dash h2 { margin-top: 2rem; }
+    .dash table { width: 100%; border-collapse: collapse; }
+    .dash th, .dash td { padding: 0.5rem; border-bottom: 1px solid #333; text-align: left; }
+    .dash form { display: inline; }
+    .dash input[type=text] { padding: 0.4rem; background: #222; color: #eee; border: 1px solid #444; }
+    .dash button { padding: 0.4rem 0.8rem; background: #444; color: #eee; border: none; cursor: pointer; }
+    .dash .danger { background: #882222; }
+    .dash .fresh-token { background: #1a3a1a; padding: 0.8rem; margin: 1rem 0; font-family: monospace; word-break: break-all; }
+    .dash .nav { margin-bottom: 1rem; }
+    .dash .nav a { color: #88aaff; margin-right: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="dash">
+    <div class="nav">
+      <a href="{% url 'home' %}">← home</a>
+      <span style="float:right">{{ user.username }} ·
+        <form action="{% url 'logout' %}" method="post" style="display:inline">{% csrf_token %}
+          <button type="submit" style="background:none;border:none;color:#88aaff;cursor:pointer;padding:0">logout</button>
+        </form>
+      </span>
+    </div>
+
+    {% for message in messages %}
+      <div class="feedback-pop">{{ message }}</div>
+    {% endfor %}
+
+    {% if fresh_token %}
+    <div class="fresh-token">
+      <strong>New token (shown once — copy now):</strong><br>
+      {{ fresh_token }}
+      <br><br>
+      Save it with: <code>portex auth {{ fresh_token }}</code>
+    </div>
+    {% endif %}
+
+    <h2>Auth tokens</h2>
+    <form action="{% url 'token-issue' %}" method="post">{% csrf_token %}
+      <input type="text" name="name" placeholder="label (optional)" />
+      <button type="submit">Issue new token</button>
+    </form>
+    <table>
+      <tr><th>name</th><th>created</th><th>last used</th><th></th></tr>
+      {% for t in tokens %}
+      <tr>
+        <td>{{ t.name|default:"(unnamed)" }}</td>
+        <td>{{ t.created_at|date:"Y-m-d H:i" }}</td>
+        <td>{{ t.last_used_at|default:"never" }}</td>
+        <td>
+          <form action="{% url 'token-revoke' t.pk %}" method="post">{% csrf_token %}
+            <button class="danger" type="submit">revoke</button>
+          </form>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4" style="color:#888">No tokens yet.</td></tr>
+      {% endfor %}
+    </table>
+
+    <h2>Reserved subdomains</h2>
+    <form action="{% url 'subdomain-claim' %}" method="post">{% csrf_token %}
+      <input type="text" name="name" placeholder="e.g. acme" />
+      <button type="submit">Claim</button>
+    </form>
+    <table>
+      <tr><th>name</th><th>claimed at</th><th></th></tr>
+      {% for s in subdomains %}
+      <tr>
+        <td>{{ s.name }}.portex.live</td>
+        <td>{{ s.created_at|date:"Y-m-d H:i" }}</td>
+        <td>
+          <form action="{% url 'subdomain-release' s.pk %}" method="post">{% csrf_token %}
+            <button class="danger" type="submit">release</button>
+          </form>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="3" style="color:#888">No subdomains yet.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</body>
+</html>

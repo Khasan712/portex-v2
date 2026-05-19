@@ -1,0 +1,35 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>portex — login</title>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@200..700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{% static 'style.css' %}" />
+  <style>
+    .login { max-width: 360px; margin: 6rem auto; padding: 2rem; background: #1a1a1a; border-radius: 8px; color: #eee; font-family: Oswald, sans-serif; }
+    .login h2 { margin: 0 0 1rem; }
+    .login label { display: block; margin: 1rem 0 0.3rem; }
+    .login input { width: 100%; padding: 0.5rem; background: #222; color: #eee; border: 1px solid #444; box-sizing: border-box; }
+    .login button { width: 100%; margin-top: 1.5rem; padding: 0.7rem; background: #4a7; color: #fff; border: none; cursor: pointer; font-size: 1rem; }
+    .login .err { background: #882222; padding: 0.5rem; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="login">
+    <h2>Sign in</h2>
+    {% if form.errors %}
+    <div class="err">Invalid username or password.</div>
+    {% endif %}
+    <form method="post">{% csrf_token %}
+      <label>Username</label>
+      <input type="text" name="username" autofocus required />
+      <label>Password</label>
+      <input type="password" name="password" required />
+      <button type="submit">Sign in</button>
+      <input type="hidden" name="next" value="{{ next }}" />
+    </form>
+  </div>
+</body>
+</html>

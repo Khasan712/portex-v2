@@ -1,0 +1,55 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Secrets — never commit
+**/.env
+.env.gateway
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+build/
+dist/
+htmlcov/
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Django
+**/staticfiles/
+**/media/uploads/
+**/db.sqlite3*
+**/celerybeat-schedule
+**/celerybeat.pid
+**/log-*.log
+**/logs/
+
+# Virtualenvs
+venv/
+.venv/
+env/
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Build artifacts
+/tmp/
+/var/
+
+# Test artifacts
+test_e2e.sh.log
+/tmp/portex-smoke/

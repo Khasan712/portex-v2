@@ -1030,7 +1030,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "portex"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "portex-common"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytes",
  "thiserror 1.0.69",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "portex-gateway"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "arc-swap",

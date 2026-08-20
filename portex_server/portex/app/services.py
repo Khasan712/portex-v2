@@ -1,34 +1,28 @@
-from datetime import datetime
+"""Small helpers shared across the app."""
+
 import calendar
 import os
+from datetime import datetime
+from pathlib import Path
 
 
 def get_log_dir(base_dir):
+    """Return the directory for today's log file, creating it if needed.
+
+    Logs live under `LOG_DIR` (default `<project>/logs`), split by year and
+    month. This used to build the path from the filesystem root, which meant
+    it wrote to `/logs` — outside any mounted volume, so the files vanished on
+    every container restart, and it failed outright on a read-only root.
+
+    Falls back to `base_dir` if the directory cannot be created; logging
+    configuration must never be the reason the process won't boot.
     """
-    - Check a subdirectory(according to current year and month) exists or not
-    - If it does not exist, create a subdirectory according to current year and month
-    - Return the directory path
-    """
+    root = Path(os.getenv('LOG_DIR') or Path(base_dir) / 'logs')
+    now = datetime.now()
+    directory = root / str(now.year) / calendar.month_name[now.month]
     try:
-        now = datetime.now()
-        year = str(now.year)
-        month_name = calendar.month_name[now.month]
-
-        # Create the directory path
-        # Create a path for the directory in the root directory
-        root_directory = os.path.abspath(os.sep)  # Get the root directory path
-        directory_path = os.path.join(root_directory, 'logs', year, month_name)  # using root directory
-        # directory_path = os.path.join(base_dir, 'logs', year, month_name)  # using base directory
-
-        # Check if the directory exists. If it doesn't exist, create it
-        if not os.path.exists(directory_path):
-            os.makedirs(directory_path)
-            print("Directory created successfully:", directory_path)
-        else:
-            print("Directory already exists:", directory_path)
-        return directory_path
-
-    except Exception as ex:
-        print("Cannot create directory for logs. Error => ", ex)
-        return base_dir
-
+        directory.mkdir(parents=True, exist_ok=True)
+        return str(directory)
+    except OSError as exc:
+        print(f'Cannot create log directory {directory} ({exc}); falling back to {base_dir}')
+        return str(base_dir)

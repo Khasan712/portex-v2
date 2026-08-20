@@ -1,6 +1,10 @@
 import ast
 import json
-from django.contrib import admin, messages
+
+from django.contrib import admin
+from django.core.exceptions import ValidationError
+from django.template.response import TemplateResponse
+
 from .models import AuthToken, CodeBase, DownloadApp, FeedBack, ReservedSubdomain
 
 
@@ -15,13 +19,29 @@ class AuthTokenAdmin(admin.ModelAdmin):
     @admin.action(description="Issue new token for selected user(s)")
     def issue_new_token(self, request, queryset):
         # Reuse selected rows to identify users; issue fresh tokens for each.
-        users = {t.user for t in queryset}
-        for user in users:
-            _, plaintext = AuthToken.issue(user, name='admin-issued')
-            messages.warning(
-                request,
-                f"Token for {user}: {plaintext}  (shown once — copy now)",
-            )
+        issued, refused = [], []
+        for user in {t.user for t in queryset}:
+            try:
+                _, plaintext = AuthToken.issue(user, name='admin-issued')
+            except ValidationError as exc:
+                # Quotas apply to admin-issued tokens too — say so rather than
+                # failing the whole action with a 500.
+                refused.append((user, '; '.join(exc.messages)))
+                continue
+            issued.append((user, plaintext))
+        # Rendered on its own page rather than pushed through `messages`,
+        # which is session-backed and would write the plaintext to the
+        # database the model takes care never to store.
+        return TemplateResponse(
+            request,
+            'admin/issued_tokens.html',
+            {
+                **self.admin_site.each_context(request),
+                'title': 'New auth tokens',
+                'issued': issued,
+                'refused': refused,
+            },
+        )
 
 
 @admin.register(ReservedSubdomain)
@@ -45,11 +65,11 @@ class DownloadAppAdmin(admin.ModelAdmin):
     list_display = ('id', 'created_at', 'updated_at', 'country', 'info')
 
     def country(self, obj):
-        try:
-            fixed_info = json.dumps(ast.literal_eval(obj.info))
-            info = json.loads(fixed_info)
-            return info.get('country')
-        except Exception as e:
-            print(str(e))
-            return '-'
+        # Newer rows are JSON; older ones are a repr() of a dict.
+        for parse in (json.loads, ast.literal_eval):
+            try:
+                return parse(obj.info).get('country') or '-'
+            except Exception:
+                continue
+        return '-'
     country.short_description = 'Country'

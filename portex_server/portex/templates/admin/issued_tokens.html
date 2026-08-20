@@ -1,0 +1,33 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <p>
+    These tokens are shown <strong>once</strong>. Only their SHA-256 hashes are
+    stored, so there is no way to recover them from this page later.
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>User</th><th>Token</th></tr>
+    </thead>
+    <tbody>
+      {% for user, token in issued %}
+        <tr>
+          <td>{{ user }}</td>
+          <td><code style="user-select:all; word-break:break-all">{{ token }}</code></td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if refused %}
+    <h2>Not issued</h2>
+    <ul>
+      {% for user, reason in refused %}
+        <li>{{ user }} — {{ reason }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <p><a href="{% url 'admin:app_authtoken_changelist' %}">← Back to auth tokens</a></p>
+{% endblock %}

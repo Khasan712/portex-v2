@@ -9,6 +9,7 @@ from app.views import (
     HomeView,
     SubdomainClaimView,
     SubdomainReleaseView,
+    ThrottledLoginView,
     TokenIssueView,
     TokenRevokeView,
     install_sh,
@@ -19,7 +20,7 @@ urlpatterns = [
     path('install/', install_sh),
 
     # Self-service dashboard for tokens + subdomains.
-    path('accounts/login/', auth_views.LoginView.as_view(template_name='login.html'), name='login'),
+    path('accounts/login/', ThrottledLoginView.as_view(), name='login'),
     path('accounts/logout/', auth_views.LogoutView.as_view(next_page='home'), name='logout'),
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
     path('tokens/', TokenIssueView.as_view(), name='token-issue'),
@@ -28,10 +29,9 @@ urlpatterns = [
     path('subdomains/<int:pk>/release/', SubdomainReleaseView.as_view(), name='subdomain-release'),
 
     path('', HomeView.as_view(), name='home'),
-] + static(
-    settings.MEDIA_URL,
-    document_root=settings.MEDIA_ROOT,
-) + static(
-    settings.STATIC_URL,
-    document_root=settings.STATIC_ROOT,
-)
+]
+
+# Static files are served by WhiteNoise in every environment. MEDIA_URL is
+# only wired up for local debugging — install.sh, the one file that lives
+# there, is served by its own view.
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

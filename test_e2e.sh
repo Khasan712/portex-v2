@@ -38,10 +38,15 @@ check "$status" "502" "Gateway 502 for unknown subdomain"
 TOKEN=$(docker exec portex_django python manage.py shell -c "
 from django.contrib.auth import get_user_model
 from app.models import AuthToken, ReservedSubdomain
-u, _ = get_user_model().objects.get_or_create(username='john', defaults={'email':'j@x'})
+U = get_user_model()
+u, _ = U.objects.get_or_create(username='john', defaults={'email':'j@x'})
 u.set_password('johnpass123'); u.save()
 AuthToken.objects.filter(user=u).delete()
 ReservedSubdomain.objects.get_or_create(name='john', defaults={'user': u})
+# A second account holding 'hello', so step 12 has someone else's subdomain
+# to be refused from. Seeded here rather than assumed to already exist.
+other, _ = U.objects.get_or_create(username='e2e-other', defaults={'email':'o@x'})
+ReservedSubdomain.objects.get_or_create(name='hello', defaults={'user': other})
 _, t = AuthToken.issue(u, name='e2e')
 print(t)
 " 2>&1 | tail -1)
@@ -80,15 +85,17 @@ check "$status" "200" "Tunneled request"
 
 # 10) Wrong-token rejection
 $CLI auth "wrong" > /dev/null
-err=$($CLI http -s john -p 4444 --server $GATEWAY_QUIC --insecure 2>&1 | grep -c "Unauthorized")
-[[ "$err" -gt 0 ]] && green "Wrong token correctly rejected" || red "wrong-token test failed"
+err=$($CLI http -s john -p 4444 --server $GATEWAY_QUIC --insecure 2>&1 | grep -c "Unauthorized" || true)
+[[ "$err" -gt 0 ]] && green "Wrong token correctly rejected" \
+  || { red "wrong-token test failed"; exit 1; }
 
 # 11) Restore good token
 $CLI auth "$TOKEN" > /dev/null
 
 # 12) Subdomain owned by someone else
-err=$($CLI http -s hello -p 4444 --server $GATEWAY_QUIC --insecure 2>&1 | grep -c "SubdomainTaken")
-[[ "$err" -gt 0 ]] && green "Other user's subdomain correctly blocked" || red "subdomain ownership test failed"
+err=$($CLI http -s hello -p 4444 --server $GATEWAY_QUIC --insecure 2>&1 | grep -c "SubdomainTaken" || true)
+[[ "$err" -gt 0 ]] && green "Other user's subdomain correctly blocked" \
+  || { red "subdomain ownership test failed"; exit 1; }
 
 # Cleanup
 kill $CLI_PID $LOCAL_PID 2>/dev/null || true

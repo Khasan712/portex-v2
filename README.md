@@ -203,6 +203,16 @@ portex http -s acme -p 3000
 | `SubdomainTaken` | Someone else owns it, or you already have it open elsewhere | Pick another name, or stop the other process |
 | `connection refused` to local | Local server isn't listening on `-p PORT` | Start your server first |
 | `no tunnel for 'X'` (curl) | The CLI isn't connected | Run `portex http -s X -p ...` again |
+| `invalid peer certificate: UnknownIssuer` | The gateway's cert isn't signed by a CA you trust | Expected against a self-signed dev gateway — add `--insecure`. Against a real host, check the cert |
+
+### How the CLI verifies the gateway
+
+The CLI checks the gateway's TLS certificate against your operating system's
+trust store, so a self-hosted gateway using a private or corporate CA works
+with no extra flags. If the OS store is unreadable — a slim container with no
+`ca-certificates`, for example — it falls back to the Mozilla root program
+bundled into the binary. `--insecure` skips verification entirely and should
+only ever point at a development gateway.
 
 ---
 
@@ -217,10 +227,16 @@ cd portex-v2
 # 1) Build the Rust binaries
 cd portex_rust && cargo build --release && cd ..
 
-# 2) Bring up the stack (Django + Postgres + Redis + gateway + celery)
+# 2) Create the root .env (Redis password — compose won't start without it)
+cp .env.example .env
+python3 -c "from secrets import token_urlsafe; print(token_urlsafe(32))"
+# paste the result as REDIS_PASSWORD in .env, then:
+chmod 600 .env
+
+# 3) Bring up the stack (Django + Postgres + Redis + gateway + celery)
 docker compose up -d --build
 
-# 3) Apply migrations + create an admin user
+# 4) Apply migrations + create an admin user
 docker compose exec django python manage.py migrate
 docker compose exec django bash -c "
   DJANGO_SUPERUSER_USERNAME=admin DJANGO_SUPERUSER_EMAIL=admin@portex.local \
@@ -228,7 +244,7 @@ docker compose exec django bash -c "
   python manage.py createsuperuser --noinput
 "
 
-# 4) Smoke-test everything
+# 5) Smoke-test everything
 ./test_e2e.sh
 ```
 
@@ -389,8 +405,8 @@ curl http://127.0.0.1:9090/metrics
 portex_active_tunnels 1
 portex_tunnel_connects_total 2
 portex_tunnel_disconnects_total 1
-portex_requests_total 2
-portex_request_errors_total 2
+portex_connections_total 2
+portex_connection_errors_total 2
 portex_bytes_upstream_total 160
 portex_bytes_downstream_total 1324
 ```
@@ -415,15 +431,21 @@ types:
   0x01  HELLO   client → server { version u16, subdomain str, token bytes }
   0x02  ACCEPT  server → client { server_version u16, assigned_subdomain str }
   0x03  REJECT  server → client { reason u8, message str }
-  0x04  PING
-  0x05  PONG
 ```
 
-For each public request, the gateway opens a **new** bidirectional stream to
-the client and writes the verbatim HTTP/1.1 wire bytes; the CLI splices
+There is no application-level heartbeat — QUIC's own keep-alive handles
+liveness.
+
+For each public **connection**, the gateway opens a new bidirectional stream
+to the client and writes the verbatim HTTP/1.1 wire bytes; the CLI splices
 that stream to `127.0.0.1:PORT` and copies bytes both ways with
 `tokio::io::copy`. There is no JSON, no base64, no buffering on the data
 path.
+
+The unit is the connection, not the request: the gateway reads the `Host`
+header once, picks the tunnel, and then pipes bytes for as long as the
+connection lives. That is what keeps it fast, and it is why the metrics are
+named `portex_connections_total` rather than `requests`.
 
 REJECT reasons: `Unauthorized`, `SubdomainTaken`, `SubdomainNotReserved`,
 `VersionIncompatible`, `ServerFull`, `Malformed`.
@@ -444,8 +466,19 @@ REJECT reasons: `Unauthorized`, `SubdomainTaken`, `SubdomainNotReserved`,
    reads `sub:{subdomain}`, checks the two user IDs match — all without
    touching Postgres on the hot path.
 
-Revoking a token deletes it from the DB and clears the Redis key
-atomically through the same signal.
+Revoking a token deletes it from the DB and clears the Redis key through the
+same signal, on `transaction.on_commit` so a rolled-back request never leaves
+a live credential behind. Existing tunnels are not dropped instantly — the
+gateway re-checks every live tunnel against Redis every
+`PORTEX_AUTH_REVALIDATE_SECS` (default 30) and closes the ones that no longer
+validate.
+
+If Redis is ever flushed or restored from an old snapshot, rebuild the index
+from the database:
+
+```bash
+docker compose exec django python manage.py sync_redis --prune
+```
 
 ---
 
@@ -489,7 +522,11 @@ See [**DEPLOY.md**](./DEPLOY.md) for a step-by-step runbook:
 | `DEPLOY.md`                           | ~7 KB   | Production runbook                 |
 | `test_e2e.sh`                         | ~4 KB   | Automated smoke test               |
 
-Total source: ~80 KB. Built binaries: ~7 MB combined.
+Total source: ~110 KB. Built binaries: ~7 MB combined.
+
+Tests: 18 Rust unit tests (`cargo test --workspace`), 28 Django tests
+(`manage.py test app`), and `test_e2e.sh` for the whole stack. CI runs all
+three on every push.
 
 ---
 
@@ -505,8 +542,13 @@ Total source: ~80 KB. Built binaries: ~7 MB combined.
 - [x] Prometheus metrics endpoint
 - [x] Hot cert reload (ArcSwap + SIGHUP + ACME renewal)
 - [x] Docker compose production stack
+- [x] Per-user quotas, sign-in throttle, gateway tunnel cap
+- [x] Credential revalidation (revoked tokens close live tunnels)
+- [x] Apex + `www` routing to the control plane, HTTP→HTTPS redirect
+- [x] CI (clippy, Rust + Django tests, end-to-end smoke) and tagged releases
 - [ ] Additional DNS providers (Route53, DigitalOcean)
-- [ ] Graceful shutdown with in-flight request draining
+- [ ] Gateway graceful shutdown with in-flight request draining
+      (the CLI already closes cleanly on Ctrl-C)
 - [ ] Multi-instance routing (Redis pub/sub for connection placement)
 - [ ] Self-signup flow + email verification
 - [ ] Free vs paid tiers

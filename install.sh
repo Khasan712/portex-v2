@@ -5,6 +5,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/Khasan712/portex-v2/main/install.sh | sh
 # or:
 #   curl -fsSL https://raw.githubusercontent.com/Khasan712/portex-v2/main/install.sh | sh -s -- v0.2.0
+#
+# This file is the canonical installer. portex_server/portex/media/install.sh
+# is a mirror served at /install/ — keep the two identical.
 
 set -e
 
@@ -16,12 +19,16 @@ INSTALL_DIR="${PORTEX_INSTALL_DIR:-/usr/local/bin}"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
+BIN="portex"
+
 case "$OS-$ARCH" in
   Darwin-arm64)        ASSET="portex-darwin-arm64" ;;
   Darwin-x86_64)       ASSET="portex-darwin-amd64" ;;
   Linux-x86_64)        ASSET="portex-linux-amd64" ;;
   Linux-aarch64)       ASSET="portex-linux-arm64" ;;
-  MINGW*-x86_64 | MSYS*-x86_64 | CYGWIN*-x86_64) ASSET="portex-windows-amd64.exe" ;;
+  # Windows will not run a binary without the .exe suffix.
+  MINGW*-x86_64 | MSYS*-x86_64 | CYGWIN*-x86_64)
+    ASSET="portex-windows-amd64.exe"; BIN="portex.exe" ;;
   *)
     echo "Unsupported platform: $OS-$ARCH" >&2
     echo "Currently published: darwin-arm64, darwin-amd64, linux-amd64, linux-arm64, windows-amd64" >&2
@@ -46,14 +53,14 @@ fi
 
 # Install with sudo only if we can't write the dir ourselves.
 if [ -w "$INSTALL_DIR" ]; then
-  install -m 755 "$TMP" "$INSTALL_DIR/portex"
+  install -m 755 "$TMP" "$INSTALL_DIR/$BIN"
 else
-  sudo install -m 755 "$TMP" "$INSTALL_DIR/portex"
+  sudo install -m 755 "$TMP" "$INSTALL_DIR/$BIN"
 fi
 rm -f "$TMP"
 
-echo "✓ portex installed to $INSTALL_DIR/portex"
-"$INSTALL_DIR/portex" --version 2>/dev/null || true
+echo "✓ portex installed to $INSTALL_DIR/$BIN"
+"$INSTALL_DIR/$BIN" --version 2>/dev/null || true
 
 cat <<EOF
 

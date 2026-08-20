@@ -46,8 +46,12 @@ Terminal 1 — gateway:
 PORTEX_BASE_DOMAIN=localtest.me \
 PORTEX_HTTP_ADDR=0.0.0.0:8080 \
 PORTEX_TUNNEL_ADDR=0.0.0.0:4443 \
-./target/release/portex-gateway
+./target/release/portex-gateway --allow-insecure-auth
 ```
+`--allow-insecure-auth` runs without Redis and accepts **any** token for
+**any** subdomain. Without it — and without `PORTEX_REDIS_URL` — the gateway
+refuses to start, so a missing env var can never silently produce an open
+relay.
 (`localtest.me` resolves `*.localtest.me` → `127.0.0.1`, useful for tests.)
 
 Terminal 2 — local app on port 3000 (e.g. `python -m http.server 3000`).
@@ -75,8 +79,10 @@ Django (control plane) owns user accounts and issues tokens.
 5. CLI sends `HELLO { subdomain, token }` over QUIC. Gateway validates both
    keys against Redis. No DB round-trip on the hot path.
 
-Until Redis is wired up, the gateway runs in **dev mode**: any token is
-accepted (a warning is logged at startup).
+Without `PORTEX_REDIS_URL` the gateway exits at startup. Pass
+`--allow-insecure-auth` (env: `PORTEX_ALLOW_INSECURE_AUTH`) to run in **dev
+mode**, where any token is accepted and a warning is logged on every start.
+Never set it on a reachable host.
 
 ## Protocol summary
 
@@ -89,9 +95,9 @@ type:
   0x01 HELLO   = client → server
   0x02 ACCEPT  = server → client
   0x03 REJECT  = server → client
-  0x04 PING
-  0x05 PONG
 ```
+
+No PING/PONG frame: the client's QUIC transport already sends keep-alives.
 
 Per-request streams are opened by the server with `open_bi()`; their content
 is the verbatim HTTP/1.1 wire bytes in each direction. The CLI just pipes
@@ -129,6 +135,24 @@ files, useful if cert rotation comes from an external process.
 For local development the cert files (or auto-generated self-signed) work fine
 without any of the ACME variables.
 
+## Limits and revocation
+
+```
+PORTEX_MAX_TUNNELS=10000            # 0 = unlimited; over the cap → ServerFull
+PORTEX_AUTH_REVALIDATE_SECS=30      # 0 disables re-checking
+```
+
+Credentials are checked at handshake time, so without the revalidation sweep
+a revoked token would keep its tunnel alive until the client disconnected.
+The sweep re-runs the same Redis lookups for every live tunnel and closes the
+ones that no longer validate. It is deliberately fail-safe: a tunnel is closed
+only when Redis answers *and* rejects it, so a Redis outage leaves existing
+tunnels alone rather than dropping every customer at once.
+
+The CLI closes its QUIC connection on Ctrl-C/SIGTERM, so a subdomain and its
+capacity slot are released immediately instead of waiting out the 60s idle
+timeout.
+
 ## Metrics
 
 ```
@@ -139,7 +163,8 @@ Bind on a private network — `/metrics` has no auth. Exposes:
 
 - `portex_active_tunnels` (gauge)
 - `portex_tunnel_connects_total`, `portex_tunnel_disconnects_total` (counters)
-- `portex_requests_total`, `portex_request_errors_total` (counters)
+- `portex_connections_total`, `portex_connection_errors_total` (counters —
+  the splice is per TCP connection, so these are not request counts)
 - `portex_bytes_upstream_total`, `portex_bytes_downstream_total` (counters)
 
 ## Roadmap
@@ -153,7 +178,9 @@ Bind on a private network — `/metrics` has no auth. Exposes:
 - [x] ACME wildcard TLS (Cloudflare DNS-01)
 - [x] Prometheus metrics endpoint
 - [x] Hot cert reload (ArcSwap + SIGHUP + ACME renewal)
+- [x] Apex/www routing to the control plane + HTTP→HTTPS redirect
+- [x] Tunnel capacity cap and periodic credential revalidation
 - [ ] Additional DNS providers (Route53, DigitalOcean)
-- [ ] Graceful shutdown with in-flight request draining
+- [ ] Gateway graceful shutdown with in-flight request draining
 - [ ] Multi-instance routing (Redis pub/sub for connection placement)
 - [ ] Bench harness vs current Django proxy

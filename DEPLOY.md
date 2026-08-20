@@ -61,7 +61,17 @@ Copy the env template and fill it in:
 ```bash
 cp portex_server/portex/.env.example portex_server/portex/.env
 nano portex_server/portex/.env
+
+# Root-level .env — the Redis password. compose.yml refuses to start without it.
+cp .env.example .env
+python3 -c "from secrets import token_urlsafe; print('REDIS_PASSWORD=' + token_urlsafe(32))" >> .env
+nano .env          # delete the placeholder REDIS_PASSWORD line
+chmod 600 .env
 ```
+
+Postgres and Redis are not published to the host. Docker's port publishing
+bypasses ufw, and Redis holds the auth index the gateway trusts — reach them
+with `docker compose exec` instead.
 
 Required values:
 
@@ -77,7 +87,16 @@ REDIS_HOST=redis
 REDIS_PORT=6379
 CORS_ALLOWED_ORIGINS=https://portex.live,https://www.portex.live
 MAIN_HOST=portex.live
+
+# Per-user quotas and sign-in throttle. Defaults shown; 0 disables a limit.
+PORTEX_MAX_TOKENS_PER_USER=10
+PORTEX_MAX_SUBDOMAINS_PER_USER=3
+PORTEX_LOGIN_MAX_ATTEMPTS=10
+PORTEX_LOGIN_THROTTLE_SECONDS=300
 ```
+
+Static files are served by WhiteNoise straight from gunicorn — no nginx or
+CDN required. `collectstatic` runs in `entrypoint.sh` on every start.
 
 Then add an extra file at the repo root with the gateway-specific vars (do
 NOT put these into the Django .env file — keeps blast radius tight):
@@ -88,7 +107,8 @@ PORTEX_BASE_DOMAIN=portex.live
 PORTEX_HTTP_ADDR=0.0.0.0:80
 PORTEX_HTTPS_ADDR=0.0.0.0:443
 PORTEX_TUNNEL_ADDR=0.0.0.0:4443
-PORTEX_REDIS_URL=redis://redis:6379/0
+# Must match REDIS_PASSWORD from the root .env.
+PORTEX_REDIS_URL=redis://:<REDIS_PASSWORD>@redis:6379/0
 PORTEX_ACME_DOMAIN=portex.live
 PORTEX_ACME_EMAIL=ops@portex.live
 PORTEX_ACME_STAGING=true
@@ -96,43 +116,39 @@ CLOUDFLARE_API_TOKEN=<paste here>
 CLOUDFLARE_ZONE_ID=<paste here>
 PORTEX_STATE_DIR=/var/lib/portex
 PORTEX_METRICS_ADDR=127.0.0.1:9090
+# Re-check live tunnels against Redis every N seconds; bounds how long a
+# revoked token keeps working. 0 disables.
+PORTEX_AUTH_REVALIDATE_SECS=30
+# Concurrent tunnel ceiling; further handshakes get ServerFull. 0 = unlimited.
+PORTEX_MAX_TUNNELS=10000
 EOF
 chmod 600 .env.gateway
 ```
 
-Wire it into compose by adding `env_file: .env.gateway` and the port
-mappings to the `gateway` service in `compose.yml`:
+The repo ships `compose.prod.yml` for this. It overrides the gateway's
+listeners to 80/443, pulls in `.env.gateway`, moves Django behind the gateway,
+and adds the persistent volumes:
 
-```yaml
-gateway:
-  build: ./portex_rust
-  container_name: portex_gateway
-  restart: unless-stopped
-  env_file: .env.gateway
-  volumes:
-    - portex_state:/var/lib/portex
-  depends_on:
-    - redis
-  ports:
-    - "80:80/tcp"
-    - "443:443/tcp"
-    - "4443:4443/udp"
-    - "127.0.0.1:9090:9090/tcp"   # metrics — bind to loopback only
+```bash
+docker compose -f compose.yml -f compose.prod.yml config   # check the merge
 ```
 
-And add the volume:
+Use both files together for every command from here on:
 
-```yaml
-volumes:
-  postgres_data_portex:
-  portex_redis_data:
-  portex_state:
+```bash
+docker compose -f compose.yml -f compose.prod.yml up -d --build
 ```
+
+> Do **not** try to configure the gateway by adding `env_file:` to the base
+> `compose.yml`. Compose gives `environment:` precedence over `env_file:`, so
+> the base file's `0.0.0.0:8080` would quietly win and the gateway would never
+> bind 80/443. The overlay sets those keys in `environment:` for exactly this
+> reason.
 
 ## 6. First start (staging cert)
 
 ```bash
-docker compose up -d --build
+docker compose -f compose.yml -f compose.prod.yml up -d --build
 docker compose logs -f gateway | grep -E "acme:|error"
 ```
 
@@ -160,7 +176,7 @@ Flip the staging flag and recreate just the gateway:
 
 ```bash
 sed -i 's/PORTEX_ACME_STAGING=true/PORTEX_ACME_STAGING=false/' .env.gateway
-docker compose up -d --force-recreate gateway
+docker compose -f compose.yml -f compose.prod.yml up -d --force-recreate gateway
 docker compose logs -f gateway | grep -E "acme:|cert"
 ```
 
@@ -222,6 +238,12 @@ docker compose logs -f --tail=100 gateway
 
 ## 11. Routine ops
 
+- **Redis index drift.** The gateway authorizes against a Redis index that
+  Django writes. If Redis is ever flushed or restored from an old snapshot,
+  every token stops working until you rebuild it:
+  ```bash
+  docker compose exec django python manage.py sync_redis --prune
+  ```
 - **Cert renewal** is automatic. The gateway renews when < 30 days remain
   and hot-swaps the new cert. No restart required. Watch
   `acme: cert renewed and reloaded` in logs every ~60 days.
@@ -235,11 +257,36 @@ docker compose logs -f --tail=100 gateway
   ```
   No data loss; volumes are preserved.
 
-## 12. Known limits
+## 12. Putting a CDN or reverse proxy in front
+
+The gateway routes on the `Host` header of the **first** request on a
+connection, then splices raw bytes for the life of that connection. That is
+what keeps it fast, and it is safe for browsers and curl, which never reuse a
+connection across hostnames.
+
+It is *not* safe behind a proxy that pools upstream connections across
+different hostnames: a second request for `b.portex.live` sent down a
+connection opened for `a.portex.live` would reach `a`'s tunnel.
+
+If you front the gateway with nginx, HAProxy, or a CDN, either disable
+upstream keep-alive or make sure the connection pool is keyed by Host. In
+nginx that means leaving `proxy_http_version 1.0` (the default, no keep-alive)
+or giving each server block its own `upstream` with `keepalive` unset.
+
+Cloudflare and most CDNs already key their origin pools per hostname, so the
+common setup is fine — but verify before assuming.
+
+## 13. Known limits
 
 - Single-instance only right now. For horizontal scale, the gateway needs a
   Redis-pub/sub-based subdomain → instance routing layer (not yet built).
-- No graceful shutdown — `docker compose down` drops active tunnels. Trade
-  off for simplicity; revisit when traffic grows.
+- No graceful shutdown on the gateway — `docker compose down` drops active
+  tunnels. The CLI does close cleanly on Ctrl-C/SIGTERM, so a client restart
+  frees its subdomain immediately.
+- Revocation is bounded by `PORTEX_AUTH_REVALIDATE_SECS`, not instant. A
+  revoked token keeps working for up to that many seconds.
 - ACME provider lock-in: Cloudflare DNS only. Adding Route53/DigitalOcean
   is a self-contained module under `portex_rust/crates/gateway/src/acme/`.
+- `portex_connections_total` counts connections, not requests. The data path
+  never parses HTTP, so per-request counts are not available; a keep-alive
+  client sending 100 requests is one connection here.

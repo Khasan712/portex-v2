@@ -1,0 +1,51 @@
+# Production overlay. Use it alongside the base file:
+#
+#   docker compose -f compose.yml -f compose.prod.yml up -d --build
+#
+# Compose merges the two, and values here win over the base file. That
+# ordering matters: `environment:` always beats `env_file:`, so adding an
+# env_file to the base gateway service would silently leave its hardcoded
+# 0.0.0.0:8080 in place. Overriding the keys explicitly is the only way to
+# actually move the listener to 80/443.
+#
+# Secrets that must not live in git go in .env.gateway (chmod 600).
+
+services:
+  django:
+    # No source bind mount in production: the image is the artifact. This also
+    # keeps the non-root container user from tripping over host file
+    # ownership, which is the usual cause of a collectstatic permission error.
+    volumes:
+      - portex_static:/portex/staticfiles
+      - portex_logs:/portex/logs
+    # Reached through the gateway on 80/443, so no host port of its own.
+    ports: !override []
+
+  celery-worker:
+    volumes:
+      - portex_logs:/portex/logs
+
+  gateway:
+    env_file: .env.gateway
+    environment:
+      PORTEX_HTTP_ADDR: 0.0.0.0:80
+      PORTEX_HTTPS_ADDR: 0.0.0.0:443
+      PORTEX_TUNNEL_ADDR: 0.0.0.0:4443
+      PORTEX_METRICS_ADDR: 0.0.0.0:9090
+      PORTEX_BASE_DOMAIN: ${PORTEX_BASE_DOMAIN:?set PORTEX_BASE_DOMAIN in .env}
+      PORTEX_APEX_UPSTREAM: django:9091
+      PORTEX_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0
+      PORTEX_STATE_DIR: /var/lib/portex
+      RUST_LOG: info
+    volumes:
+      - portex_state:/var/lib/portex
+    ports: !override
+      - "80:80/tcp"
+      - "443:443/tcp"
+      - "4443:4443/udp"
+      - "127.0.0.1:9090:9090/tcp"
+
+volumes:
+  portex_state:
+  portex_static:
+  portex_logs:

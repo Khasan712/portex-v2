@@ -78,6 +78,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: System checks
         run: python manage.py check --deploy --fail-level ERROR
+      - name: Collect static files
+        run: python manage.py collectstatic --noinput
       - name: Tests
         run: python manage.py test app -v 2
 
@@ -112,6 +114,21 @@ jobs:
             docker compose exec -T django python manage.py migrate --noinput && break
             sleep 5
           done
+      - name: Wait for the stack to be serving
+        run: |
+          set -eu
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:9091/ \
+               && curl -fsS -o /dev/null http://127.0.0.1:9090/metrics; then
+              echo "django and gateway are up"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "stack did not come up in time" >&2
+          docker compose ps
+          docker compose logs --tail=50
+          exit 1
       - name: Smoke test
         run: ./test_e2e.sh
       - name: Dump logs on failure

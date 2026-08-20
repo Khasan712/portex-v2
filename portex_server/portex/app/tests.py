@@ -21,6 +21,14 @@ User = get_user_model()
 
 LOCMEM_CACHE = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
 
+# Rendering a template means resolving {% static %}, and the production
+# storage backend resolves through a manifest that only exists once
+# collectstatic has run. Tests should not need a build step first.
+PLAIN_STATIC = {
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+}
+
 
 class AuthTokenModelTests(TestCase):
     def setUp(self):
@@ -107,6 +115,7 @@ class ReservedSubdomainTests(TestCase):
         self.assertIn('limit', ' '.join(ctx.exception.messages).lower())
 
 
+@override_settings(STORAGES=PLAIN_STATIC)
 class DashboardViewTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user('alice', password='pw-alice-123')
@@ -158,7 +167,7 @@ class DashboardViewTests(TestCase):
         self.assertContains(response, 'Subdomain must be')
 
 
-@override_settings(CACHES=LOCMEM_CACHE, PORTEX_LOGIN_MAX_ATTEMPTS=3)
+@override_settings(CACHES=LOCMEM_CACHE, STORAGES=PLAIN_STATIC, PORTEX_LOGIN_MAX_ATTEMPTS=3)
 class LoginThrottleTests(TestCase):
     def setUp(self):
         from django.core.cache import cache

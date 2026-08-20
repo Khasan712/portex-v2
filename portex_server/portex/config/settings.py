@@ -183,7 +183,10 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Loggers
+# None means no writable directory was found — fall back to console-only
+# logging rather than letting dictConfig raise and take the process down.
 LOG_DIR = get_log_dir(base_dir=BASE_DIR)
+_LOG_HANDLERS = ['console', 'common'] if LOG_DIR else ['console']
 
 LOGGING = {
     'version': 1,
@@ -200,15 +203,6 @@ LOGGING = {
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
         },
-        'common': {
-            'level': 'DEBUG',
-            'class': 'logging.handlers.TimedRotatingFileHandler',
-            'filename': os.path.join(LOG_DIR, 'log-' + str(date.today()) + '.log'),
-            'when': 'midnight',
-            'interval': 1,
-            'backupCount': 0,
-            'formatter': 'verbose',
-        }
     },
     'loggers': {
         # 'django': {
@@ -217,12 +211,23 @@ LOGGING = {
         #     'propagate': True,
         # },
         'Common': {
-            'handlers': ['console', 'common'],
+            'handlers': _LOG_HANDLERS,
             'propagate': True,
             'level': 'DEBUG'
         }
     }
 }
+
+if LOG_DIR:
+    LOGGING['handlers']['common'] = {
+        'level': 'DEBUG',
+        'class': 'logging.handlers.TimedRotatingFileHandler',
+        'filename': os.path.join(LOG_DIR, 'log-' + str(date.today()) + '.log'),
+        'when': 'midnight',
+        'interval': 1,
+        'backupCount': 0,
+        'formatter': 'verbose',
+    }
 
 CORS_ALLOW_METHODS = [
     'DELETE',

@@ -35,6 +35,10 @@ services:
       - ./.env
     volumes:
       - ./portex_server/portex:/portex
+      # Mounted over the bind mount so the container user keeps ownership of
+      # the two directories it has to write to.
+      - portex_static:/portex/staticfiles
+      - portex_logs:/var/log/portex
     depends_on:
       - db
       - redis
@@ -52,6 +56,7 @@ services:
       - ./.env
     volumes:
       - ./portex_server/portex:/portex
+      - portex_logs:/var/log/portex
     depends_on:
       - django
       - redis
@@ -81,3 +86,5 @@ services:
 volumes:
   postgres_data_portex:
   portex_redis_data:
+  portex_static:
+  portex_logs:

@@ -17,13 +17,13 @@ services:
     # ownership, which is the usual cause of a collectstatic permission error.
     volumes:
       - portex_static:/portex/staticfiles
-      - portex_logs:/portex/logs
+      - portex_logs:/var/log/portex
     # Reached through the gateway on 80/443, so no host port of its own.
     ports: !override []
 
   celery-worker:
     volumes:
-      - portex_logs:/portex/logs
+      - portex_logs:/var/log/portex
 
   gateway:
     env_file: .env.gateway
@@ -47,5 +47,3 @@ services:
 
 volumes:
   portex_state:
-  portex_static:
-  portex_logs:

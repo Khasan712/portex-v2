@@ -14,10 +14,14 @@ RUN pip install --no-cache-dir --upgrade pip \
 # worked when compose bind-mounted the source over it.
 COPY . /portex/
 
-# Writable spots for a non-root run: collectstatic output and the log tree.
+# Writable spots for a non-root run. Logs live outside /portex on purpose:
+# compose bind-mounts the source tree over it during development, and a
+# bind mount carries the host's ownership, so anything the container needs
+# to write inside it would be denied.
 RUN useradd --create-home --uid 10001 portex \
-    && mkdir -p /portex/staticfiles /portex/logs \
-    && chown -R portex:portex /portex
+    && mkdir -p /portex/staticfiles /var/log/portex \
+    && chown -R portex:portex /portex /var/log/portex
+ENV LOG_DIR=/var/log/portex
 USER portex
 
 EXPOSE 9091

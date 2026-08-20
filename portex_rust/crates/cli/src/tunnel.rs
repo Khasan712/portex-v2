@@ -20,7 +20,15 @@ pub async fn run(opts: HttpOpts) -> anyhow::Result<()> {
         .next()
         .with_context(|| format!("could not resolve {}", opts.server))?;
 
-    let mut endpoint = Endpoint::client("0.0.0.0:0".parse()?)?;
+    // Bind the local socket in the same address family the gateway resolved
+    // to. A dual-stack host with an AAAA record resolves to IPv6 first, and a
+    // v4-bound socket cannot reach it.
+    let bind_addr: std::net::SocketAddr = if server_addr.is_ipv6() {
+        "[::]:0".parse()?
+    } else {
+        "0.0.0.0:0".parse()?
+    };
+    let mut endpoint = Endpoint::client(bind_addr)?;
     endpoint.set_default_client_config(client_config(opts.insecure)?);
 
     tracing::info!(server = %opts.server, subdomain = %opts.subdomain, "connecting");
@@ -63,20 +71,57 @@ pub async fn run(opts: HttpOpts) -> anyhow::Result<()> {
 
     let conn = Arc::new(conn);
     loop {
-        match conn.accept_bi().await {
-            Ok((send, recv)) => {
-                let local_port = opts.port;
-                tokio::spawn(async move {
-                    if let Err(err) = local::pipe_stream(send, recv, local_port).await {
-                        tracing::warn!(?err, "stream forward ended with error");
-                    }
-                });
-            }
-            Err(err) => {
-                tracing::warn!(?err, "tunnel closed");
-                return Err(err.into());
+        tokio::select! {
+            incoming = conn.accept_bi() => match incoming {
+                Ok((send, recv)) => {
+                    let local_port = opts.port;
+                    tokio::spawn(async move {
+                        if let Err(err) = local::pipe_stream(send, recv, local_port).await {
+                            tracing::warn!(?err, "stream forward ended with error");
+                        }
+                    });
+                }
+                Err(err) => {
+                    tracing::warn!(?err, "tunnel closed");
+                    return Err(err.into());
+                }
+            },
+            _ = shutdown_signal() => {
+                // Tell the gateway we are going away. Without this the
+                // subdomain stays claimed until the 60s idle timeout expires,
+                // so restarting a tunnel right after Ctrl-C fails with
+                // SubdomainTaken and the slot counts against server capacity.
+                println!("\nclosing tunnel…");
+                conn.close(0u32.into(), b"client shutting down");
+                let _ = tokio::time::timeout(Duration::from_secs(3), endpoint.wait_idle()).await;
+                return Ok(());
             }
         }
+    }
+}
+
+/// Resolves on Ctrl-C, or on SIGTERM where the platform has it.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let ctrl_c = tokio::signal::ctrl_c();
+        tokio::pin!(ctrl_c);
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = &mut ctrl_c => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = ctrl_c.await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
     }
 }
 
@@ -87,10 +132,7 @@ fn parse_host_port(s: &str) -> anyhow::Result<(String, u16)> {
 }
 
 fn client_config(insecure: bool) -> anyhow::Result<ClientConfig> {
-    let mut roots = rustls::RootCertStore::empty();
-    for cert in rustls_native_roots()? {
-        roots.add(cert).ok();
-    }
+    let roots = root_store()?;
 
     let mut crypto = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
@@ -117,11 +159,41 @@ fn transport_config() -> TransportConfig {
     t
 }
 
-fn rustls_native_roots() -> anyhow::Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
-    // Native cert store loading is optional; for the MVP we accept an empty
-    // store and lean on `--insecure` during development. Production builds
-    // can flip on the `rustls-native-certs` feature.
-    Ok(Vec::new())
+/// Build the trust anchors used to verify the gateway's certificate.
+///
+/// The OS trust store comes first, so a self-hosted gateway using a private
+/// or corporate CA works without extra flags. If the platform store is
+/// unavailable or empty — a slim container with no `ca-certificates`, for
+/// instance — we fall back to the Mozilla root program bundled into the
+/// binary, so the CLI still verifies rather than silently trusting nothing.
+fn root_store() -> anyhow::Result<rustls::RootCertStore> {
+    let mut roots = rustls::RootCertStore::empty();
+
+    let native = rustls_native_certs::load_native_certs();
+    for err in &native.errors {
+        tracing::debug!(%err, "could not read part of the OS trust store");
+    }
+    for cert in native.certs {
+        roots.add(cert).ok();
+    }
+
+    if roots.is_empty() {
+        tracing::warn!(
+            "OS trust store is empty or unreadable — falling back to the bundled Mozilla roots"
+        );
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+
+    if roots.is_empty() {
+        anyhow::bail!(
+            "no trust anchors available: cannot verify the gateway certificate. \
+             Install your system's ca-certificates package, or pass --insecure \
+             to skip verification (development only)."
+        );
+    }
+
+    tracing::debug!(anchors = roots.len(), "loaded trust anchors");
+    Ok(roots)
 }
 
 mod insecure {

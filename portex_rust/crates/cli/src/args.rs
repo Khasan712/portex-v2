@@ -12,6 +12,11 @@ pub enum Command {
     /// Save an auth token to ~/.portex/config.toml.
     Auth {
         /// Auth token issued by portex.live.
+        ///
+        /// Tokens are base64url, so roughly one in sixty-four starts with a
+        /// hyphen. Without this the parser reads that as a flag and the user
+        /// simply cannot save the token they were issued.
+        #[arg(allow_hyphen_values = true)]
         token: String,
     },
     /// Expose a local HTTP server.

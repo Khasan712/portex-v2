@@ -7,11 +7,11 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
-repository = "https://github.com/Khasan712/portex"
+repository = "https://github.com/Khasan712/portex-v2"
 
 [workspace.dependencies]
 portex-common = { path = "crates/common" }
@@ -21,11 +21,10 @@ bytes = "1"
 quinn = { version = "0.11", default-features = false, features = ["rustls", "runtime-tokio"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2"
+rustls-native-certs = "0.8"
+webpki-roots = "1"
 rcgen = "0.13"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
-hyper = { version = "1", features = ["http1", "server", "client"] }
-hyper-util = { version = "0.1", features = ["tokio", "server-auto", "client-legacy"] }
-http-body-util = "0.1"
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
@@ -42,7 +41,6 @@ thiserror = "1"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-url = "2"
 
 [profile.release]
 lto = "fat"

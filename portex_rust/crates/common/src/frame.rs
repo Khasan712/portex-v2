@@ -3,6 +3,10 @@
 //! Each control frame is:
 //!   [u8 type] [u32 length BE] [payload bytes]
 //!
+//! There is no PING/PONG: QUIC's own keep-alive (configured on the client
+//! transport) keeps the connection alive, so an application-level heartbeat
+//! would be dead weight on the wire and in this file.
+//!
 //! Payload format is per-frame-type (see `proto`). Per-request data streams
 //! do NOT use this framing — they carry raw HTTP/1.1 bytes end-to-end.
 
@@ -18,8 +22,6 @@ pub enum FrameType {
     Hello = 0x01,
     Accept = 0x02,
     Reject = 0x03,
-    Ping = 0x04,
-    Pong = 0x05,
 }
 
 impl FrameType {
@@ -28,8 +30,6 @@ impl FrameType {
             0x01 => FrameType::Hello,
             0x02 => FrameType::Accept,
             0x03 => FrameType::Reject,
-            0x04 => FrameType::Ping,
-            0x05 => FrameType::Pong,
             other => return Err(FrameError::UnknownType(other)),
         })
     }

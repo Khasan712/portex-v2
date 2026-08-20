@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let mut args = Args::parse();
-    let registry = Arc::new(Registry::new());
+    let registry = Arc::new(Registry::with_capacity(args.max_tunnels));
     let metrics = Arc::new(Metrics::new());
     let auth = Arc::new(auth::Authenticator::from_args(&args).await?);
 
@@ -81,6 +81,16 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    if args.auth_revalidate_secs > 0 {
+        tokio::spawn(tunnel::revalidate_loop(
+            registry.clone(),
+            auth.clone(),
+            std::time::Duration::from_secs(args.auth_revalidate_secs),
+        ));
+    } else {
+        tracing::warn!("credential revalidation disabled — revoked tokens stay live until disconnect");
+    }
+
     let tunnel_handle = tokio::spawn(tunnel::serve(
         args.tunnel_addr,
         registry.clone(),
@@ -89,26 +99,37 @@ async fn main() -> anyhow::Result<()> {
         tls.clone(),
     ));
 
+    if args.apex_upstream.is_none() {
+        tracing::warn!(
+            "PORTEX_APEX_UPSTREAM not set — {} and www.{} will return 404 instead of \
+             reaching the control plane",
+            args.base_domain,
+            args.base_domain,
+        );
+    }
+
+    let ingress = ingress::Ingress {
+        registry: registry.clone(),
+        metrics: metrics.clone(),
+        base_domain: args.base_domain.clone(),
+        apex_upstream: args.apex_upstream.clone(),
+    };
+
+    // With TLS configured, port 80 exists to send people to port 443 — not to
+    // serve the same content unencrypted.
     let ingress_handle = tokio::spawn(ingress::serve(
         args.http_addr,
-        registry.clone(),
-        metrics.clone(),
-        args.base_domain.clone(),
+        ingress.clone(),
+        args.https_addr.is_some(),
     ));
 
     let metrics_handle = args.metrics_addr.map(|addr| {
         tokio::spawn(metrics::serve(addr, metrics.clone(), registry.clone()))
     });
 
-    let https_handle = args.https_addr.map(|addr| {
-        tokio::spawn(ingress::serve_https(
-            addr,
-            registry.clone(),
-            metrics.clone(),
-            args.base_domain.clone(),
-            tls.clone(),
-        ))
-    });
+    let https_handle = args
+        .https_addr
+        .map(|addr| tokio::spawn(ingress::serve_https(addr, ingress, tls.clone())));
 
     tokio::select! {
         res = tunnel_handle => res.context("tunnel task panicked")??,

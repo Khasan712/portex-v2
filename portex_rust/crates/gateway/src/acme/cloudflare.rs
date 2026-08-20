@@ -20,7 +20,7 @@ pub struct Cloudflare {
 impl Cloudflare {
     pub fn new(token: String, zone_id: String) -> Self {
         Self {
-            http: Client::builder().user_agent("portex-gateway/0.2").build().expect("reqwest"),
+            http: Client::builder().user_agent("portex-gateway/0.3").build().expect("reqwest"),
             token,
             zone_id,
         }

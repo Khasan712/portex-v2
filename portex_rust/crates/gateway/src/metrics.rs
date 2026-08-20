@@ -18,8 +18,8 @@ use crate::registry::Registry;
 pub struct Metrics {
     pub tunnel_connects_total: AtomicU64,
     pub tunnel_disconnects_total: AtomicU64,
-    pub requests_total: AtomicU64,
-    pub request_errors_total: AtomicU64,
+    pub connections_total: AtomicU64,
+    pub connection_errors_total: AtomicU64,
     pub bytes_upstream_total: AtomicU64,
     pub bytes_downstream_total: AtomicU64,
 }
@@ -34,8 +34,11 @@ impl Metrics {
         line(&mut out, "portex_active_tunnels", "Currently connected tunnels", "gauge", active_tunnels as u64);
         line(&mut out, "portex_tunnel_connects_total", "Tunnels accepted since start", "counter", self.tunnel_connects_total.load(Ordering::Relaxed));
         line(&mut out, "portex_tunnel_disconnects_total", "Tunnels closed since start", "counter", self.tunnel_disconnects_total.load(Ordering::Relaxed));
-        line(&mut out, "portex_requests_total", "Public requests dispatched to a tunnel", "counter", self.requests_total.load(Ordering::Relaxed));
-        line(&mut out, "portex_request_errors_total", "Public requests rejected by the ingress", "counter", self.request_errors_total.load(Ordering::Relaxed));
+        // Named for connections, not requests: the data path is a byte splice
+        // over the whole TCP connection, so a keep-alive client sending many
+        // requests is one event here.
+        line(&mut out, "portex_connections_total", "Public connections routed to a tunnel or the control plane", "counter", self.connections_total.load(Ordering::Relaxed));
+        line(&mut out, "portex_connection_errors_total", "Public connections rejected by the ingress", "counter", self.connection_errors_total.load(Ordering::Relaxed));
         line(&mut out, "portex_bytes_upstream_total", "Bytes sent from public client into the tunnel", "counter", self.bytes_upstream_total.load(Ordering::Relaxed));
         line(&mut out, "portex_bytes_downstream_total", "Bytes returned from tunnel to public client", "counter", self.bytes_downstream_total.load(Ordering::Relaxed));
         out

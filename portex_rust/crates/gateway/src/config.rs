@@ -36,9 +36,32 @@ pub struct Args {
     #[arg(long, env = "PORTEX_TLS_KEY")]
     pub tls_key: Option<PathBuf>,
 
-    /// Redis URL for token + subdomain reservation lookups. If unset, auth is disabled (dev only).
+    /// Where to send apex + `www.` traffic — the Django control plane, as
+    /// `host:port`. Without it the landing page, dashboard, admin and
+    /// /install/ are unreachable on the public domain.
+    #[arg(long, env = "PORTEX_APEX_UPSTREAM")]
+    pub apex_upstream: Option<String>,
+
+    /// Redis URL for token + subdomain reservation lookups. Required unless
+    /// --allow-insecure-auth is passed.
     #[arg(long, env = "PORTEX_REDIS_URL")]
     pub redis_url: Option<String>,
+
+    /// Run without Redis, accepting ANY token for ANY subdomain. Local
+    /// development only — never set this on a reachable host.
+    #[arg(long, env = "PORTEX_ALLOW_INSECURE_AUTH", default_value_t = false)]
+    pub allow_insecure_auth: bool,
+
+    /// How often to re-check live tunnels against the auth backend, in
+    /// seconds. Bounds how long a revoked token keeps working. 0 disables.
+    #[arg(long, env = "PORTEX_AUTH_REVALIDATE_SECS", default_value_t = 30)]
+    pub auth_revalidate_secs: u64,
+
+    /// Maximum concurrent tunnels. Further handshakes are rejected with
+    /// ServerFull rather than degrading everyone already connected.
+    /// 0 means unlimited.
+    #[arg(long, env = "PORTEX_MAX_TUNNELS", default_value_t = 10_000)]
+    pub max_tunnels: usize,
 
     /// Apex domain the ACME wildcard cert covers (e.g. `portex.live`).
     /// When set, the gateway acquires/renews a cert for `*.{domain}` + `{domain}`.

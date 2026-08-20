@@ -3,11 +3,13 @@
 //! The hot path never parses the HTTP request — we only locate the Host
 //! header, look up the right tunnel, and pipe raw bytes both ways.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use quinn::Connection;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 use crate::metrics::Metrics;
 
@@ -61,18 +63,54 @@ pub fn extract_host(buf: &[u8]) -> Option<&str> {
     None
 }
 
-/// `acme.portex.live` + `portex.live` → `Some("acme")`. Rejects apex.
-pub fn strip_subdomain<'a>(host: &'a str, base: &str) -> Option<&'a str> {
+/// Where a public request belongs, based on its `Host` header.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Route<'a> {
+    /// The apex domain or its `www.` alias — control plane traffic.
+    Apex,
+    /// A tunnel subdomain, normalised to lowercase.
+    Tunnel(Cow<'a, str>),
+}
+
+/// `acme.portex.live` → `Tunnel("acme")`; `portex.live` and `www.portex.live`
+/// → `Apex`; anything else → `None`.
+///
+/// Host names are case-insensitive per RFC 4343, while the registry is keyed
+/// on the lowercase names Django stores — so `ACME.portex.live` has to resolve
+/// to the same tunnel as `acme.portex.live`. The comparison is done in place
+/// and only allocates for the rare host that actually contains uppercase.
+pub fn route<'a>(host: &'a str, base: &str) -> Option<Route<'a>> {
     let host = host.split(':').next()?;
-    let suffix = format!(".{base}");
-    if !host.ends_with(&suffix) {
+    if host.eq_ignore_ascii_case(base) {
+        return Some(Route::Apex);
+    }
+
+    let split_at = host.len().checked_sub(base.len() + 1)?;
+    if !host.is_char_boundary(split_at) {
         return None;
     }
-    let sub = &host[..host.len() - suffix.len()];
+    let (sub, suffix) = host.split_at(split_at);
+    if !suffix.starts_with('.') || !suffix[1..].eq_ignore_ascii_case(base) {
+        return None;
+    }
     if sub.is_empty() || sub.contains('.') {
         return None;
     }
-    Some(sub)
+    if sub.eq_ignore_ascii_case("www") {
+        return Some(Route::Apex);
+    }
+    Some(Route::Tunnel(if sub.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(sub.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(sub)
+    }))
+}
+
+/// Extract the request target from the HTTP request line (`GET /path HTTP/1.1`).
+pub fn request_target(buf: &[u8]) -> Option<&str> {
+    let line_end = buf.windows(2).position(|w| w == b"\r\n")?;
+    let line = std::str::from_utf8(&buf[..line_end]).ok()?;
+    line.split(' ').nth(1)
 }
 
 /// Open a fresh bi-directional QUIC stream and splice bytes between the
@@ -113,6 +151,47 @@ where
     Ok(())
 }
 
+/// Splice the public socket to a plain TCP upstream — the Django control
+/// plane serving the apex domain. Same byte-for-byte pipe as the tunnel path,
+/// just with a TCP peer instead of a QUIC stream.
+pub async fn splice_tcp<S>(
+    sock: S,
+    upstream: &str,
+    buffered_head: Vec<u8>,
+    metrics: &Metrics,
+) -> anyhow::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let up = TcpStream::connect(upstream).await?;
+    up.set_nodelay(true).ok();
+    let (mut up_read, mut up_write) = tokio::io::split(up);
+
+    let head_bytes = buffered_head.len() as u64;
+    up_write.write_all(&buffered_head).await?;
+
+    let (mut sock_read, mut sock_write) = tokio::io::split(sock);
+
+    let client_to_upstream = async {
+        let r = tokio::io::copy(&mut sock_read, &mut up_write).await;
+        let _ = up_write.shutdown().await;
+        r
+    };
+    let upstream_to_client = async {
+        let r = tokio::io::copy(&mut up_read, &mut sock_write).await;
+        let _ = sock_write.shutdown().await;
+        r
+    };
+
+    let (c2u, u2c) = tokio::join!(client_to_upstream, upstream_to_client);
+    let up_total = head_bytes + c2u.unwrap_or(0);
+    let down = u2c.unwrap_or(0);
+    metrics.bytes_upstream_total.fetch_add(up_total, Ordering::Relaxed);
+    metrics.bytes_downstream_total.fetch_add(down, Ordering::Relaxed);
+    tracing::debug!(up_bytes = up_total, down_bytes = down, "ingress: spliced to apex");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,23 +216,51 @@ mod tests {
         assert_eq!(extract_host(&buf), Some("acme.portex.live"));
     }
 
-    #[test]
-    fn strip_subdomain_basic() {
-        assert_eq!(strip_subdomain("acme.portex.live", "portex.live"), Some("acme"));
+    fn tunnel(name: &str) -> Option<Route<'_>> {
+        Some(Route::Tunnel(Cow::Borrowed(name)))
     }
 
     #[test]
-    fn strip_subdomain_with_port() {
-        assert_eq!(strip_subdomain("acme.portex.live:8080", "portex.live"), Some("acme"));
+    fn route_basic() {
+        assert_eq!(route("acme.portex.live", "portex.live"), tunnel("acme"));
     }
 
     #[test]
-    fn strip_subdomain_rejects_apex() {
-        assert_eq!(strip_subdomain("portex.live", "portex.live"), None);
+    fn route_with_port() {
+        assert_eq!(route("acme.portex.live:8080", "portex.live"), tunnel("acme"));
     }
 
     #[test]
-    fn strip_subdomain_rejects_nested() {
-        assert_eq!(strip_subdomain("a.b.portex.live", "portex.live"), None);
+    fn route_is_case_insensitive() {
+        // Host names are case-insensitive, but the registry is keyed lowercase.
+        assert_eq!(route("ACME.PORTEX.LIVE", "portex.live"), tunnel("acme"));
+        assert_eq!(route("AcMe.Portex.Live", "portex.live"), tunnel("acme"));
+    }
+
+    #[test]
+    fn route_apex_and_www_go_to_the_control_plane() {
+        assert_eq!(route("portex.live", "portex.live"), Some(Route::Apex));
+        assert_eq!(route("PORTEX.LIVE", "portex.live"), Some(Route::Apex));
+        assert_eq!(route("www.portex.live", "portex.live"), Some(Route::Apex));
+        assert_eq!(route("WWW.portex.live", "portex.live"), Some(Route::Apex));
+    }
+
+    #[test]
+    fn route_rejects_nested_and_foreign() {
+        assert_eq!(route("a.b.portex.live", "portex.live"), None);
+        assert_eq!(route("evil.com", "portex.live"), None);
+        assert_eq!(route("notportex.live", "portex.live"), None);
+    }
+
+    #[test]
+    fn route_handles_multibyte_hosts_without_panicking() {
+        assert_eq!(route("ünïcode.example", "portex.live"), None);
+        assert_eq!(route("日本語", "portex.live"), None);
+    }
+
+    #[test]
+    fn request_target_reads_the_path() {
+        assert_eq!(request_target(b"GET /a/b?c=1 HTTP/1.1\r\nHost: x\r\n\r\n"), Some("/a/b?c=1"));
+        assert_eq!(request_target(b"nonsense"), None);
     }
 }

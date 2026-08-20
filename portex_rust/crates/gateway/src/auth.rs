@@ -28,23 +28,46 @@ impl Authenticator {
                     .context("connect to Redis")?;
                 Some(manager)
             }
-            None => {
-                tracing::warn!("PORTEX_REDIS_URL not set — auth disabled (dev mode)");
+            None if args.allow_insecure_auth => {
+                tracing::warn!(
+                    "PORTEX_REDIS_URL not set and --allow-insecure-auth given — \
+                     AUTH IS DISABLED: any token opens any subdomain"
+                );
                 None
             }
+            None => anyhow::bail!(
+                "PORTEX_REDIS_URL is not set. The gateway will not start without an \
+                 auth backend, because it would accept any token for any subdomain. \
+                 Set PORTEX_REDIS_URL, or pass --allow-insecure-auth for local development."
+            ),
         };
         Ok(Self { redis })
     }
 
-    pub async fn authorize(&self, token: &[u8], subdomain: &str) -> Result<UserId, AuthError> {
-        let Some(redis) = self.redis.clone() else {
-            return Ok(UserId("dev".into()));
-        };
+    /// Validate a plaintext token against a subdomain reservation.
+    pub async fn authorize(&self, token: &[u8], subdomain: &str) -> Result<Authorized, AuthError> {
+        if self.redis.is_none() {
+            return Ok(Authorized { user_id: DEV_USER.into(), token_hash: String::new() });
+        }
         if token.is_empty() {
             return Err(AuthError::MissingToken);
         }
         let token_hash = hash_token(token);
-        let mut conn = redis;
+        let user_id = self.authorize_hash(&token_hash, subdomain).await?;
+        Ok(Authorized { user_id, token_hash })
+    }
+
+    /// Same check against an already-hashed token. The revalidation sweep
+    /// uses this to re-verify live tunnels without keeping plaintext tokens
+    /// in memory.
+    pub async fn authorize_hash(
+        &self,
+        token_hash: &str,
+        subdomain: &str,
+    ) -> Result<String, AuthError> {
+        let Some(mut conn) = self.redis.clone() else {
+            return Ok(DEV_USER.into());
+        };
         let user_for_token: Option<String> = conn
             .get(format!("token:{token_hash}"))
             .await
@@ -57,11 +80,41 @@ impl Authenticator {
             .map_err(AuthError::Backend)?;
         match user_for_sub {
             None => Err(AuthError::SubdomainNotReserved),
-            Some(owner) if owner == user_id => Ok(UserId(user_id)),
+            Some(owner) if owner == user_id => Ok(user_id),
             Some(_) => Err(AuthError::SubdomainTaken),
         }
     }
+
+    /// Record that a token was just used, for the dashboard's "last used"
+    /// column. Best-effort: the hot path must not fail over bookkeeping.
+    ///
+    /// The gateway never touches Postgres, so it leaves a timestamp in Redis
+    /// and Django folds it into the database when it renders the dashboard.
+    pub async fn mark_token_used(&self, token_hash: &str) {
+        let Some(mut conn) = self.redis.clone() else { return };
+        if token_hash.is_empty() {
+            return;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // TTL is a backstop: revoking a token deletes this key too, but a key
+        // orphaned by a crash should not linger forever.
+        let result: Result<(), redis::RedisError> = conn
+            .set_ex(format!("token_used:{token_hash}"), now, TOKEN_USED_TTL_SECS)
+            .await;
+        if let Err(err) = result {
+            tracing::debug!(?err, "could not record token usage");
+        }
+    }
 }
+
+/// Ninety days — comfortably longer than any realistic dashboard visit gap.
+const TOKEN_USED_TTL_SECS: u64 = 90 * 24 * 3600;
+
+/// Placeholder identity used when the gateway runs with --allow-insecure-auth.
+const DEV_USER: &str = "dev";
 
 fn hash_token(token: &[u8]) -> String {
     use sha2::{Digest, Sha256};
@@ -69,8 +122,13 @@ fn hash_token(token: &[u8]) -> String {
     hex::encode(digest)
 }
 
+/// Who a handshake was admitted as, plus the hashed credential it presented.
 #[derive(Debug, Clone)]
-pub struct UserId(pub String);
+pub struct Authorized {
+    pub user_id: String,
+    /// Empty in insecure-auth mode, where there is nothing to revalidate.
+    pub token_hash: String,
+}
 
 #[derive(Debug, Error)]
 pub enum AuthError {

@@ -1,0 +1,74 @@
+name: Release
+
+# Builds the published CLI binaries. Without this they are built by hand,
+# which is how the shipped binaries came to lag the source by months —
+# users kept downloading a build that predated several fixes.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14,      target: aarch64-apple-darwin,       asset: portex-darwin-arm64 }
+          - { os: macos-14,      target: x86_64-apple-darwin,        asset: portex-darwin-amd64 }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu,   asset: portex-linux-amd64 }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu,  asset: portex-linux-arm64,     apt: gcc-aarch64-linux-gnu }
+          - { os: ubuntu-latest, target: x86_64-pc-windows-gnu,      asset: portex-windows-amd64.exe, apt: gcc-mingw-w64-x86-64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: portex_rust
+          key: ${{ matrix.target }}
+      - name: Install cross toolchain
+        if: matrix.apt != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+      - name: Build
+        run: cargo build --release --locked --bin portex --target ${{ matrix.target }}
+        working-directory: portex_rust
+      - name: Stage the binary
+        run: |
+          set -eu
+          src=portex_rust/target/${{ matrix.target }}/release/portex
+          [ -f "$src.exe" ] && src="$src.exe"
+          mkdir -p dist && cp "$src" "dist/${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: staged
+      - name: Collect assets and checksum them
+        run: |
+          set -eu
+          mkdir -p dist
+          find staged -type f -exec mv {} dist/ \;
+          cd dist && shasum -a 256 portex-* > checksums.txt
+          cat checksums.txt
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/*
+          generate_release_notes: true

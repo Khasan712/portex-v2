@@ -58,7 +58,15 @@ check "$status" "200" "Local app on :4444"
 # 8) Save token and start CLI
 $CLI auth "$TOKEN" > /dev/null
 pkill -f "$CLI http" 2>/dev/null || true
-sleep 1
+
+# A CLI killed with a signal never closes its QUIC connection, so the gateway
+# can still be holding `john` from an earlier run. Wait for the registry to
+# drain rather than racing it — otherwise back-to-back runs fail with
+# SubdomainTaken through no fault of the code under test.
+for _ in $(seq 1 45); do
+  [[ "$(curl -s http://$METRICS/metrics | awk '/^portex_active_tunnels/{print $2}')" == "0" ]] && break
+  sleep 1
+done
 $CLI http -s john -p 4444 --server $GATEWAY_QUIC --insecure > /tmp/portex-cli.log 2>&1 &
 CLI_PID=$!
 sleep 3
